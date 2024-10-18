@@ -8,9 +8,10 @@ import (
 )
 
 type Config struct {
-	interval     time.Duration
-	timeout      time.Duration
-	probComplete float64
+	interval          time.Duration
+	timeout           time.Duration
+	probPassedCeiling float64
+	worker            int
 }
 
 type JailbreakStatus string
@@ -19,6 +20,21 @@ const (
 	StatusFailed JailbreakStatus = "failed"
 	StatusPassed JailbreakStatus = "passed"
 )
+
+type JailbreakResult struct {
+	Status      JailbreakStatus
+	Probability float64
+	Attempt     int
+}
+
+func getConfig() *Config {
+	return &Config{
+		interval:          10 * time.Millisecond,
+		timeout:           30 * time.Second,
+		probPassedCeiling: 0.0005,
+		worker:            5,
+	}
+}
 
 func (s JailbreakStatus) String() string {
 	switch s {
@@ -31,47 +47,58 @@ func (s JailbreakStatus) String() string {
 	}
 }
 
-func getConfig() *Config {
-	return &Config{
-		interval:     10 * time.Millisecond,
-		timeout:      30 * time.Second,
-		probComplete: 0.005,
-	}
-}
-
-func jailbreak(prob float64) (JailbreakStatus, float64) {
+func jailbreak(probability float64, attempt int) JailbreakResult {
 	randNumb := rand.Float64()
 
 	var status = StatusFailed
 
-	if randNumb < prob {
+	if randNumb < probability {
 		status = StatusPassed
 	}
 
-	return status, randNumb
+	return JailbreakResult{
+		Status:      status,
+		Probability: randNumb,
+		Attempt:     attempt,
+	}
 }
 
-func attempJailbreak(conf *Config) error {
+func worker(ctx context.Context, prob float64, attempt int, chanResult chan<- JailbreakResult) {
+	select {
+	case <-ctx.Done():
+		return
+	default:
+		jobResult := jailbreak(prob, attempt)
+		select {
+		case chanResult <- jobResult:
+		case <-ctx.Done():
+		}
+	}
+}
+
+func jailbreakAttempt(ctx context.Context, conf *Config) error {
 	ticker := time.NewTicker(conf.interval)
 	defer ticker.Stop()
 
-	timeoutTimer := time.NewTimer(conf.timeout)
-	defer timeoutTimer.Stop()
+	chanResult := make(chan JailbreakResult)
+	defer close(chanResult)
 
-	attemp := 0
+	attempt := 0
 
 	for {
 		select {
+		case <-ctx.Done():
+			return fmt.Errorf("pooling timeout!!. after %s with %d attempts", conf.timeout, attempt)
+
 		case <-ticker.C:
-			attemp++
-			status, randVal := jailbreak(conf.probComplete)
-			fmt.Printf("attemp = %d, status = %s (prob: %.4f)\n", attemp, status, randVal)
-			if status == "passed" {
-				fmt.Println("complete!!. exist pooling")
+			attempt++
+			go worker(ctx, conf.probPassedCeiling, attempt, chanResult)
+		case jobResult := <-chanResult:
+			fmt.Printf("attempt = %d, status = %s (prob: %.4f)\n", jobResult.Attempt, jobResult.Status, jobResult.Probability)
+			if jobResult.Status == StatusPassed {
+				fmt.Println("complete!! exiting pooling")
 				return nil
 			}
-		case <-timeoutTimer.C:
-			return fmt.Errorf("pooling timeout!!. after %s with %d attemps", conf.timeout, attemp)
 		}
 	}
 }
@@ -81,11 +108,11 @@ func main() {
 
 	conf := getConfig()
 
-	_, cancel := context.WithTimeout(context.Background(), conf.timeout)
+	ctx, cancel := context.WithTimeout(context.Background(), conf.timeout)
 	defer cancel()
 
 	fmt.Println("start pooling...")
-	if err := attempJailbreak(conf); err != nil {
+	if err := jailbreakAttempt(ctx, conf); err != nil {
 		fmt.Printf("error: %s\n", err)
 		return
 	}
