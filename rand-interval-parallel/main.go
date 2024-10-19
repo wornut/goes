@@ -15,6 +15,15 @@ type Config struct {
 	worker            int
 }
 
+func getConfig() *Config {
+	return &Config{
+		interval:          5 * time.Millisecond,
+		timeout:           30 * time.Second,
+		probPassedCeiling: 0.00005,
+		worker:            6,
+	}
+}
+
 type JailbreakStatus string
 
 const (
@@ -27,15 +36,6 @@ type JailbreakResult struct {
 	Status      JailbreakStatus
 	Probability float64
 	Attempt     int
-}
-
-func getConfig() *Config {
-	return &Config{
-		interval:          5 * time.Millisecond,
-		timeout:           30 * time.Second,
-		probPassedCeiling: 0.00005,
-		worker:            6,
-	}
 }
 
 func (s JailbreakStatus) String() string {
