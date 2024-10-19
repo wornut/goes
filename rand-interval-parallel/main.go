@@ -4,7 +4,10 @@ import (
 	"context"
 	"fmt"
 	"math/rand"
+	"os"
+	"os/signal"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -133,12 +136,27 @@ func jailbreakAttempt(ctx context.Context, conf *Config) error {
 }
 
 func main() {
+
+	// listen systerm call
+	sigterm := make(chan os.Signal, 1)
+	signal.Notify(sigterm, os.Interrupt, syscall.SIGTERM)
+
+	// always unique rand
 	rand.New(rand.NewSource(time.Now().UnixNano()))
 
 	conf := getConfig()
 
 	ctx, cancel := context.WithTimeout(context.Background(), conf.timeout)
 	defer cancel()
+
+	go func() {
+		select {
+		case sig := <-sigterm:
+			fmt.Printf("\nReceived signal: %s. Cannelling...\n", sig)
+			cancel()
+		case <-ctx.Done():
+		}
+	}()
 
 	fmt.Println("Start pooling..")
 	if err := jailbreakAttempt(ctx, conf); err != nil {
