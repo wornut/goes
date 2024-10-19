@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"math/rand"
+	"sync"
 	"time"
 )
 
@@ -22,6 +23,7 @@ const (
 )
 
 type JailbreakResult struct {
+	WorkerID    int
 	Status      JailbreakStatus
 	Probability float64
 	Attempt     int
@@ -29,10 +31,10 @@ type JailbreakResult struct {
 
 func getConfig() *Config {
 	return &Config{
-		interval:          10 * time.Millisecond,
+		interval:          5 * time.Millisecond,
 		timeout:           30 * time.Second,
-		probPassedCeiling: 0.0005,
-		worker:            5,
+		probPassedCeiling: 0.00005,
+		worker:            6,
 	}
 }
 
@@ -41,14 +43,14 @@ func (s JailbreakStatus) String() string {
 	case StatusPassed:
 		return "GGEZ bro!!."
 	case StatusFailed:
-		return "Oh..s**t, f**k"
+		return "F**k"
 	default:
 		return "Ummm"
 	}
 }
 
-func jailbreak(probability float64, attempt int) JailbreakResult {
-	randNumb := rand.Float64()
+func jailbreak(r *rand.Rand, probability float64) (JailbreakStatus, float64) {
+	randNumb := r.Float64()
 
 	var status = StatusFailed
 
@@ -56,66 +58,93 @@ func jailbreak(probability float64, attempt int) JailbreakResult {
 		status = StatusPassed
 	}
 
-	return JailbreakResult{
-		Status:      status,
-		Probability: randNumb,
-		Attempt:     attempt,
-	}
+	return status, randNumb
 }
 
-func worker(ctx context.Context, prob float64, attempt int, chanResult chan<- JailbreakResult) {
-	select {
-	case <-ctx.Done():
-		return
-	default:
-		jobResult := jailbreak(prob, attempt)
-		select {
-		case chanResult <- jobResult:
-		case <-ctx.Done():
-		}
-	}
-}
+func worker(ctx context.Context, workerID int, conf *Config, wg *sync.WaitGroup, results chan<- JailbreakResult) {
+	defer wg.Done()
 
-func jailbreakAttempt(ctx context.Context, conf *Config) error {
+	r := rand.New(rand.NewSource(time.Now().UnixNano() + int64(workerID)))
+
 	ticker := time.NewTicker(conf.interval)
 	defer ticker.Stop()
-
-	chanResult := make(chan JailbreakResult)
-	defer close(chanResult)
 
 	attempt := 0
 
 	for {
 		select {
 		case <-ctx.Done():
-			return fmt.Errorf("pooling timeout!!. after %s with %d attempts", conf.timeout, attempt)
-
+			return
 		case <-ticker.C:
 			attempt++
-			go worker(ctx, conf.probPassedCeiling, attempt, chanResult)
-		case jobResult := <-chanResult:
-			fmt.Printf("attempt = %d, status = %s (prob: %.4f)\n", jobResult.Attempt, jobResult.Status, jobResult.Probability)
-			if jobResult.Status == StatusPassed {
-				fmt.Println("complete!! exiting pooling")
-				return nil
+			status, prob := jailbreak(r, conf.probPassedCeiling)
+			job := JailbreakResult{
+				WorkerID:    workerID,
+				Status:      status,
+				Probability: prob,
+				Attempt:     attempt,
+			}
+
+			select {
+			case results <- job:
+			case <-ctx.Done():
+				return
 			}
 		}
 	}
 }
 
+func jailbreakAttempt(ctx context.Context, conf *Config) error {
+	results := make(chan JailbreakResult)
+	defer close(results)
+
+	var wg sync.WaitGroup
+
+	for i := 1; i <= conf.worker; i++ {
+		wg.Add(1)
+		go worker(ctx, i, conf, &wg, results)
+
+	}
+
+	done := make(chan struct{})
+
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+
+	attempts := 0
+
+	for {
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("pooling timeout!!. after %s with %d attempts", conf.timeout, attempts)
+		case job := <-results:
+			attempts++
+			fmt.Printf("Worker %d | Attempt = %d | Status = %s (prob: %.5f)\n", job.WorkerID, job.Attempt, job.Status, job.Probability)
+			if job.Status == StatusPassed {
+				fmt.Printf("\nJailbroken. Worker %d win with %d attemp\n", job.WorkerID, job.Attempt)
+				return nil
+			}
+		case <-done:
+			return fmt.Errorf("all workers complete but no one can!!")
+		}
+	}
+}
+
 func main() {
-	rand.New(rand.NewSource(time.Now().UnixMicro()))
+	rand.New(rand.NewSource(time.Now().UnixNano()))
 
 	conf := getConfig()
 
 	ctx, cancel := context.WithTimeout(context.Background(), conf.timeout)
 	defer cancel()
 
-	fmt.Println("start pooling...")
+	fmt.Println("Start pooling..")
 	if err := jailbreakAttempt(ctx, conf); err != nil {
 		fmt.Printf("error: %s\n", err)
 		return
 	}
 
-	fmt.Println("pooling complete. yea")
+	fmt.Println("Pooling complete. Yea!")
 }
