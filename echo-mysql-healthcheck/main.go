@@ -1,13 +1,9 @@
 package main
 
 import (
-	"context"
 	"database/sql"
 	"fmt"
 	"log"
-	"net/http"
-	"os"
-	"os/signal"
 	"time"
 
 	_ "github.com/go-sql-driver/mysql"
@@ -47,19 +43,5 @@ func main() {
 
 	e.GET("/up", app.HealthCheck)
 
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
-	defer stop()
-
-	go func() {
-		if err := e.Start(fmt.Sprintf(":%s", cfg.ServerPort)); err != nil && err != http.ErrServerClosed {
-			e.Logger.Fatal("shutting down the server")
-		}
-	}()
-
-	<-ctx.Done()
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	if err := e.Shutdown(ctx); err != nil {
-		e.Logger.Fatal(err)
-	}
+	e.Logger.Fatal(e.Start(fmt.Sprintf(":%s", cfg.ServerPort)))
 }
