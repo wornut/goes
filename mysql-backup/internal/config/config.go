@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/go-playground/validator/v10"
 )
@@ -45,9 +46,20 @@ func LoadConfig() (*Config, error) {
 	}
 
 	validate := validator.New()
-	if err := validate.Struct(conf); err != nil {
-		return nil, fmt.Errorf("configuration validation failed: %v", err)
+	err := validate.Struct(conf)
+
+	if err == nil {
+		return conf, nil
 	}
 
-	return conf, nil
+	if _, ok := err.(*validator.ValidationErrors); ok {
+		return nil, fmt.Errorf("configuration validate failed:  %v", err)
+	}
+
+	var errMsgs []string
+	for _, err := range err.(validator.ValidationErrors) {
+		errMsgs = append(errMsgs, fmt.Sprintf("field `%s` failed on %s tag", err.Field(), err.Tag()))
+	}
+
+	return nil, fmt.Errorf("configuration validation failed: \n%v", strings.Join(errMsgs, "\n"))
 }
